@@ -66,17 +66,18 @@ let rec drain = (window, app, state, remaining) => {
 };
 
 let rec loop = (window, renderer: Render.Renderer, config: Config, app, state) => {
-  drain(window, app, state, 256) :> Result.andThen((step) => {
+  drain(window, app, state, 256) :> Task.fromResult :> Task.andThen((step) => {
     match(step) {
-      Exit => { Ok(void) },
+      Exit => { Task.succeed(void) },
       Continue(afterEvents) => {
         match(app.advance(afterEvents)) {
-          Exit => { Ok(void) },
+          Exit => { Task.succeed(void) },
           Continue(next) => {
             Render.draw(renderer, app.fragment(next))
               :> Result.andThen((_) => { Sdl.present(window) })
               :> Result.andThen((_) => { Sdl.wait(window, config.frameDelay) })
-              :> Result.andThen((_) => {
+              :> Task.fromResult
+              :> Task.andThen((_) => {
                 loop(window, renderer, config, app, next)
               })
           },
@@ -104,9 +105,17 @@ let start = (config: Config, app, window) => {
     Result|Sdl.context(window), Device.preferredCanvasFormat()| :> build
       :> Task.fromResult
       :> Task.andThen((renderer) => {
-        let rendered = loop(window, renderer, config, app, app.initial);
-        let cleaned = Result|Render.destroy(renderer), Sdl.close(window)|;
-        Result|rendered, cleaned| :> Result.map((_) => { void }) :> Task.fromResult
+        let cleanup = () => {
+          Result|Render.destroy(renderer), Sdl.close(window)|
+            :> Result.map((_) => { void })
+        };
+        loop(window, renderer, config, app, app.initial)
+          :> Task.andThen((_) => { cleanup() :> Task.fromResult })
+          :> Task.orElse((error) => {
+            cleanup() :> Task.fromResult :> Task.andThen((_) => {
+              Task.fail(error)
+            })
+          })
       })
   }) :> Task.orElse((error) => {
     let _closed = Sdl.close(window);
