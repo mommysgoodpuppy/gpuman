@@ -1,0 +1,24 @@
+-- WebGPU discovery. Keeping this in one module means applications do not need
+-- to repeat the Option/Task adapter ceremony.
+
+from js.global("navigator") import unsafe { gpu: GPU };
+from js.global import type { GPU, GPUAdapter, GPUDevice };
+
+let requireAdapter = (adapter: Option<GPUAdapter>) => {
+  match(adapter) {
+    Some(value) => { value.requestDevice() },
+    None => { Js.Error("WebGPU found no suitable adapter") :> Task.fail },
+  }
+};
+
+let requestFrom = (source: GPU) => {
+  source.requestAdapter() :> Task.andThen(requireAdapter)
+};
+
+let request = () => {
+  requestFrom(gpu)
+};
+
+let preferredCanvasFormat = () => {
+  gpu.getPreferredCanvasFormat()
+};

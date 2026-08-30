@@ -1,0 +1,130 @@
+-- High-level SDL shader window runtime. Applications provide immutable state,
+-- event/update functions, and a fragment factory; this module owns the loop.
+
+from "./device.wm" import * as Device;
+from "./render.wm" import * as Render;
+from "./sdl.wm" import * as Sdl;
+
+record Config = {
+  libraryPath: String,
+  title: String,
+  width: Number,
+  height: Number,
+  frameDelay: Number,
+  resizable: Bool
+};
+
+type Step<State> = Continue<State> | Exit;
+
+record App<State> = {
+  initial: State,
+  update: (Sdl.Event, State) -> Step<State>,
+  advance: State -> Step<State>,
+  fragment: State -> Gpu.Fragment
+};
+
+let config = (libraryPath, title, width, height) => {
+  .{
+    libraryPath,
+    title,
+    width,
+    height,
+    frameDelay = 16,
+    resizable = true
+  }
+};
+
+let rec drain = (window, app, state, remaining) => {
+  if (remaining <= 0) {
+    Ok(Continue(state))
+  } else {
+    Sdl.poll(window) :> Result.andThen((event) => {
+      match(event) {
+        Sdl.NoEvent => { Ok(Continue(state)) },
+        Sdl.Quit => { Ok(Exit) },
+        Sdl.Resized(width, height) => {
+          if (width <= 0 || height <= 0) {
+            drain(window, app, state, remaining - 1)
+          } else {
+            Sdl.resize(window, width, height) :> Result.andThen((_) => {
+              match(app.update(event, state)) {
+                Exit => { Ok(Exit) },
+                Continue(next) => { drain(window, app, next, remaining - 1) },
+              }
+            })
+          }
+        },
+        _ => {
+          match(app.update(event, state)) {
+            Exit => { Ok(Exit) },
+            Continue(next) => { drain(window, app, next, remaining - 1) },
+          }
+        },
+      }
+    })
+  }
+};
+
+let rec loop = (window, renderer: Render.Renderer, config: Config, app, state) => {
+  drain(window, app, state, 256) :> Result.andThen((step) => {
+    match(step) {
+      Exit => { Ok(void) },
+      Continue(afterEvents) => {
+        match(app.advance(afterEvents)) {
+          Exit => { Ok(void) },
+          Continue(next) => {
+            Render.draw(renderer, app.fragment(next))
+              :> Result.andThen((_) => { Sdl.present(window) })
+              :> Result.andThen((_) => { Sdl.wait(window, config.frameDelay) })
+              :> Result.andThen((_) => {
+                loop(window, renderer, config, app, next)
+              })
+          },
+        }
+      },
+    }
+  })
+};
+
+let openWindow = (config: Config) => {
+  if (config.resizable) {
+    Sdl.openResizable(
+      config.libraryPath, config.title, config.width, config.height
+    )
+  } else {
+    Sdl.open(config.libraryPath, config.title, config.width, config.height)
+  }
+};
+
+let start = (config: Config, app, window) => {
+  Device.request() :> Task.andThen((device) => {
+    let build = Monad.via Result (context, format) => {
+      Render.create(device, context, format, app.fragment(app.initial))
+    };
+    Result|Sdl.context(window), Device.preferredCanvasFormat()| :> build
+      :> Task.fromResult
+      :> Task.andThen((renderer) => {
+        let rendered = loop(window, renderer, config, app, app.initial);
+        let cleaned = Result|Render.destroy(renderer), Sdl.close(window)|;
+        Result|rendered, cleaned| :> Result.map((_) => { void }) :> Task.fromResult
+      })
+  }) :> Task.orElse((error) => {
+    let _closed = Sdl.close(window);
+    Task.fail(error)
+  })
+};
+
+let run = (config: Config, app) => {
+  openWindow(config) :> Task.fromResult :> Task.andThen((window) => {
+    start(config, app, window)
+  })
+};
+
+let errorText = match(error) => {
+  Js.Error(message) => { message },
+  Js.Unknown => { "unknown JavaScript error" },
+};
+
+let runAndReport = (config: Config, app) => {
+  run(config, app) :> Task.recover((error) => { print(errorText(error)) })
+};

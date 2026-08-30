@@ -1,0 +1,30 @@
+-- Render without a window and inspect pixels directly from WebGPU.
+
+from "../lib/gpuman.wm" import * as GpuMan;
+
+let shade = (_coord) => {
+  @gpu;
+  (1.0, 0.25, 0.0, 1.0)
+};
+
+let fragment = Gpu.fragment(shade);
+
+let readback = (width, height, shader) => {
+  let render = Monad.via Task (device) => {
+    GpuMan.renderToBytes(device, width, height, shader)
+  };
+  let firstRed = Monad.via Task (pixels) => {
+    GpuMan.pixelByte(pixels, 0, 0, 0)
+      :> Task.fromResult
+  };
+
+  GpuMan.requestDevice()
+    :> render
+    :> firstRed
+};
+
+let main = () => {
+  readback(64, 64, fragment)
+    :> Task.map((red) => { print(`red channel of pixel (0, 0): ${red}`) })
+    :> Task.recover((error) => { print(error) })
+};

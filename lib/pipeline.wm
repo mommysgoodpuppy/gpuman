@@ -1,0 +1,135 @@
+-- Shared shader-module, render-pipeline, uniform, and bind-group ownership.
+-- Canvas and readback renderers both build on this module.
+
+from js.global import { Uint8Array };
+from js.global("GPUBufferUsage") import * as GPUBufferUsage;
+from js.global import type {
+  GPUBindGroup,
+  GPUBindGroupLayout,
+  GPUBuffer,
+  GPUDevice,
+  GPURenderPipeline,
+  GPUShaderModule
+};
+
+record Pipeline = {
+  device: GPUDevice,
+  module: GPUShaderModule,
+  pipeline: GPURenderPipeline,
+  artifactIdentity: String,
+  uniformBuffer: Option<GPUBuffer>,
+  bindGroupLayout: Option<GPUBindGroupLayout>
+};
+
+let create = (device: GPUDevice, format: String, fragment: Gpu.Fragment) => {
+  let module = device.createShaderModule(JSON{ code: Gpu.wgsl(fragment) });
+  module :> Result.andThen((module) => {
+    device.createRenderPipeline(JSON{
+      layout: "auto",
+      vertex: JSON{
+        module: module,
+        entryPoint: Gpu.vertexEntryPoint(fragment)
+      },
+      fragment: JSON{
+        module: module,
+        entryPoint: Gpu.fragmentEntryPoint(fragment),
+        targets: JSON[JSON{ format: format }]
+      },
+      primitive: JSON{ topology: "triangle-list" }
+    }) :> Result.andThen((pipeline) => {
+      let finish = Monad.via Result (uniformUsage, copyDestinationUsage) => {
+        if (Gpu.bindingCount(fragment) <= 0) {
+          Ok(.{
+            device,
+            module,
+            pipeline,
+            artifactIdentity = Gpu.artifactIdentity(fragment),
+            uniformBuffer = None,
+            bindGroupLayout = None
+          })
+        } else {
+          pipeline.getBindGroupLayout(0) :> Result.andThen((layout) => {
+            if (Gpu.uniformByteLength(fragment) <= 0) {
+              Ok(.{
+                device,
+                module,
+                pipeline,
+                artifactIdentity = Gpu.artifactIdentity(fragment),
+                uniformBuffer = None,
+                bindGroupLayout = Some(layout)
+              })
+            } else {
+              device.createBuffer(JSON{
+                size: Gpu.uniformByteLength(fragment),
+                usage: uniformUsage + copyDestinationUsage
+              }) :> Result.map((buffer) => {
+                .{
+                  device,
+                  module,
+                  pipeline,
+                  artifactIdentity = Gpu.artifactIdentity(fragment),
+                  uniformBuffer = Some(buffer),
+                  bindGroupLayout = Some(layout)
+                }
+              })
+            }
+          })
+        }
+      };
+      Result|GPUBufferUsage.UNIFORM, GPUBufferUsage.COPY_DST| :> finish
+    })
+  })
+};
+
+let upload = (owned: Pipeline, fragment: Gpu.Fragment) => {
+  let device: GPUDevice = owned.device;
+  if (owned.artifactIdentity != Gpu.artifactIdentity(fragment)) {
+    Err(Js.Error("renderer received a different shader artifact"))
+  } else {
+    match(owned.uniformBuffer) {
+      None => {
+        if (Gpu.uniformByteLength(fragment) == 0) {
+          Ok(void)
+        } else {
+          Err(Js.Error("shader requires a uniform buffer"))
+        }
+      },
+      Some(buffer) => {
+        Uint8Array.new(Gpu.uniformBytes(fragment)) :> Result.andThen((bytes) => {
+          device.queue :> Result.andThen((queue) => {
+            queue.writeBuffer(buffer, 0, bytes)
+          })
+        })
+      },
+    }
+  }
+};
+
+let bindGroup = (owned: Pipeline, fragment: Gpu.Fragment) => {
+  let device: GPUDevice = owned.device;
+  match(owned.bindGroupLayout) {
+    None => {
+      if (Gpu.bindingCount(fragment) == 0) {
+        Ok(None)
+      } else {
+        Err(Js.Error("renderer is missing its resource layout"))
+      }
+    },
+    Some(layout) => {
+      Gpu.bindGroupEntries(fragment, device, owned.uniformBuffer)
+        :> Result.andThen((entries) => {
+          device.createBindGroup(JSON{
+            layout: layout,
+            entries: entries
+          }) :> Result.map(Some)
+        })
+    },
+  }
+};
+
+let destroy = (owned: Pipeline) => {
+  match(owned.uniformBuffer) {
+    Some(buffer) => { buffer.destroy() },
+    None => { Ok(void) },
+  }
+};

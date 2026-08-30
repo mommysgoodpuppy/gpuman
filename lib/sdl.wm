@@ -1,0 +1,68 @@
+-- Optional SDL2 adapter for Deno.UnsafeWindowSurface. The renderer itself has
+-- no SDL dependency; callers using another toolkit can ignore this module.
+
+from js.module("./sdl.ts") import {
+  openWindow, pollEvent, eventKind, eventA, eventB, canvasContext, resizeWindowSurface,
+  presentWindow, delay, closeWindow
+};
+from js.module("./sdl.ts") import type { SdlEvent, SdlWindow };
+from js.global import type { GPUCanvasContext };
+
+type Event =
+  | NoEvent
+  | Quit
+  | Resized<Number, Number>
+  | MouseMoved<Number, Number>;
+
+let open = (
+  libraryPath: String,
+  title: String,
+  width: Number,
+  height: Number
+) => {
+  openWindow(libraryPath, title, width, height, false)
+};
+
+let openResizable = (
+  libraryPath: String,
+  title: String,
+  width: Number,
+  height: Number
+) => {
+  openWindow(libraryPath, title, width, height, true)
+};
+
+let context = (runtime: SdlWindow) => { canvasContext(runtime) };
+let present = (runtime: SdlWindow) => { presentWindow(runtime) };
+let wait = (runtime: SdlWindow, milliseconds: Number) => {
+  delay(runtime, milliseconds)
+};
+let resize = (runtime: SdlWindow, width: Number, height: Number) => {
+  resizeWindowSurface(runtime, width, height)
+};
+let close = (runtime: SdlWindow) => { closeWindow(runtime) };
+
+let poll = (runtime: SdlWindow) => {
+  pollEvent(runtime) :> Result.andThen((event) => {
+    let decode = Monad.via Result (kind, a, b) => {
+      if (kind == 1) {
+        Ok(Quit)
+      } else {
+        if (kind == 2) {
+          Ok(Resized(a, b))
+        } else {
+          if (kind == 3) {
+            Ok(MouseMoved(a, b))
+          } else {
+            Ok(NoEvent)
+          }
+        }
+      }
+    };
+    Result|
+      eventKind(event), 
+      eventA(event), 
+      eventB(event)
+    | :> decode
+  })
+};

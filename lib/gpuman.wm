@@ -1,0 +1,144 @@
+-- Single-import facade for gpuman's common rendering, readback, and SDL window
+-- APIs. Focused modules remain available for custom integrations.
+
+from "./device.wm" import * as Device;
+from "./render.wm" import * as Render;
+from "./readback.wm" import * as Readback;
+from "./sdl.wm" import * as Sdl;
+from "./sdl_window.wm" import * as SdlWindow;
+from js.global import type { GPUDevice, GPUCanvasContext };
+
+record Renderer = {
+  inner: Render.Renderer
+};
+
+record Pixels = {
+  inner: Readback.Pixels
+};
+
+type WindowEvent =
+  | NoEvent
+  | Resized<Number, Number>
+  | MouseMoved<Number, Number>;
+
+type WindowStep<State> = Continue<State> | Exit;
+
+record WindowConfig = {
+  libraryPath: String,
+  title: String,
+  width: Number,
+  height: Number,
+  frameDelay: Number,
+  resizable: Bool
+};
+
+record WindowApp<State> = {
+  initial: State,
+  update: (WindowEvent, State) -> WindowStep<State>,
+  advance: State -> WindowStep<State>,
+  fragment: State -> Gpu.Fragment
+};
+
+let requestDevice = () => { Device.request() };
+let preferredCanvasFormat = () => { Device.preferredCanvasFormat() };
+
+let createRenderer = (
+  device: GPUDevice,
+  context: GPUCanvasContext,
+  format: String,
+  fragment: Gpu.Fragment
+) => {
+  Render.create(device, context, format, fragment)
+    :> Result.map(Renderer)
+};
+
+let createRendererWithClear = (
+  device: GPUDevice,
+  context: GPUCanvasContext,
+  format: String,
+  clear: (Number, Number, Number, Number),
+  fragment: Gpu.Fragment
+) => {
+  Render.createWithClear(device, context, format, clear, fragment)
+    :> Result.map(Renderer)
+};
+
+let draw = (renderer: Renderer, fragment: Gpu.Fragment) => {
+  Render.draw(renderer.inner, fragment)
+};
+
+let destroyRenderer = (renderer: Renderer) => {
+  Render.destroy(renderer.inner)
+};
+
+let renderToBytes = (
+  device: GPUDevice,
+  width: Number,
+  height: Number,
+  fragment: Gpu.Fragment
+) => {
+  Readback.render(device, width, height, fragment)
+    :> Task.map(Pixels)
+};
+
+let pixelWidth = (pixels: Pixels) => { Readback.width(pixels.inner) };
+let pixelHeight = (pixels: Pixels) => { Readback.height(pixels.inner) };
+let pixelRowBytes = (pixels: Pixels) => { Readback.rowBytes(pixels.inner) };
+let pixelByteLength = (pixels: Pixels) => { Readback.length(pixels.inner) };
+let pixelByte = (pixels: Pixels, x: Number, y: Number, channel: Number) => {
+  Readback.byte(pixels.inner, x, y, channel)
+};
+
+let windowConfig = (libraryPath, title, width, height) => {
+  let config: WindowConfig = .{
+    libraryPath,
+    title,
+    width,
+    height,
+    frameDelay = 16,
+    resizable = true
+  };
+  config
+};
+
+let windowEvent = match(event) => {
+  Sdl.NoEvent => { NoEvent },
+  Sdl.Resized(width, height) => { Resized(width, height) },
+  Sdl.MouseMoved(dx, dy) => { MouseMoved(dx, dy) },
+  Sdl.Quit => { NoEvent },
+};
+
+let internalStep = match(step) => {
+  Continue(state) => { SdlWindow.Continue(state) },
+  Exit => { SdlWindow.Exit },
+};
+
+let internalConfig = (config: WindowConfig) => {
+  SdlWindow.Config(
+    config.libraryPath,
+    config.title,
+    config.width,
+    config.height,
+    config.frameDelay,
+    config.resizable
+  )
+};
+
+let internalApp = (app: WindowApp<s>) => {
+  SdlWindow.App(
+    app.initial,
+    (event, state) => {
+      app.update(windowEvent(event), state) :> internalStep
+    },
+    (state) => { app.advance(state) :> internalStep },
+    app.fragment
+  )
+};
+
+let runWindow = (config: WindowConfig, app) => {
+  SdlWindow.run(internalConfig(config), internalApp(app))
+};
+
+let runWindowAndReport = (config: WindowConfig, app) => {
+  SdlWindow.runAndReport(internalConfig(config), internalApp(app))
+};

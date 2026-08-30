@@ -1,0 +1,17 @@
+-- Reusable concrete shader-environment schemas. These remain nominal across
+-- imports and can be shared by applications without changing their GPU ABI.
+
+record Time = {
+  time: Number
+};
+
+record ResolutionTime = {
+  resolution: (Number, Number),
+  time: Number
+};
+
+record Frame = {
+  resolution: (Number, Number),
+  time: Number,
+  enabled: Bool
+};

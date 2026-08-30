@@ -1,0 +1,164 @@
+-- Headless rendering. Pixels are returned in WebGPU's padded row layout; use
+-- rowBytes to walk rows (it is always a multiple of 256).
+
+from "./pipeline.wm" import * as Pipeline;
+from js.global("GPUBufferUsage") import * as GPUBufferUsage;
+from js.global("GPUMapMode") import * as GPUMapMode;
+from js.global("GPUTextureUsage") import * as GPUTextureUsage;
+from js.global import type {
+  ArrayBuffer, GPUBindGroup, GPUBuffer, GPUCommandBuffer, GPUCommandEncoder,
+  GPUDevice, GPUQueue, GPURenderPassEncoder, GPURenderPipeline, GPUTexture,
+  GPUTextureView, Uint8Array
+};
+from js.module("./readback.ts") import { copyMappedBytes, byteLength, byteAt };
+
+record Pixels = {
+  bytes: Uint8Array,
+  width: Number,
+  height: Number,
+  rowBytes: Number
+};
+
+let createView = (texture: GPUTexture) => { texture.createView() };
+let beginPass = (encoder: GPUCommandEncoder, view: GPUTextureView) => {
+  encoder.beginRenderPass(JSON{
+    colorAttachments: JSON[JSON{
+      view: view,
+      loadOp: "clear",
+      storeOp: "store",
+      clearValue: JSON{ r: 0, g: 0, b: 0, a: 1 }
+    }]
+  })
+};
+let setPipeline = (pass: GPURenderPassEncoder, pipeline: GPURenderPipeline) => {
+  pass.setPipeline(pipeline)
+};
+let setBindGroup = (pass: GPURenderPassEncoder, group: GPUBindGroup) => {
+  pass.setBindGroup(0, Some(group))
+};
+let drawTriangle = (pass: GPURenderPassEncoder) => { pass.draw(3, 1, 0, 0) };
+let endPass = (pass: GPURenderPassEncoder) => { pass.end() };
+let copyToBuffer = (
+  encoder: GPUCommandEncoder,
+  texture: GPUTexture,
+  staging: GPUBuffer,
+  width: Number,
+  height: Number,
+  rowBytes: Number
+) => {
+  encoder.copyTextureToBuffer(
+    JSON{ texture: texture },
+    JSON{ buffer: staging, bytesPerRow: rowBytes, rowsPerImage: height },
+    JSON{ width: width, height: height, depthOrArrayLayers: 1 }
+  )
+};
+let finish = (encoder: GPUCommandEncoder) => { encoder.finish() };
+let submit = (queue: GPUQueue, commands: GPUCommandBuffer) => {
+  queue.submit(JSON[commands])
+};
+let mapRead = (staging: GPUBuffer, mode: Number) => { staging.mapAsync(mode) };
+let mappedRange = (staging: GPUBuffer) => { staging.getMappedRange() };
+let unmap = (staging: GPUBuffer) => { staging.unmap() };
+let destroyBuffer = (staging: GPUBuffer) => { staging.destroy() };
+let destroyTexture = (texture: GPUTexture) => { texture.destroy() };
+
+let render = (
+  device: GPUDevice,
+  width: Number,
+  height: Number,
+  fragment: Gpu.Fragment
+) => {
+  let format = "rgba8unorm";
+  let packedRowBytes = width * 4;
+  let remainder = packedRowBytes % 256;
+  let rowBytes = if (remainder == 0) {
+    packedRowBytes
+  } else {
+    packedRowBytes + 256 - remainder
+  };
+  let byteLength = rowBytes * height;
+  let build = Monad.via Result (
+    renderAttachment,
+    copySource,
+    copyDestination,
+    mapRead,
+    mapMode
+  ) => {
+    Pipeline.create(device, format, fragment) :> Result.andThen((owned) => {
+      device.createTexture(JSON{
+        size: JSON{ width: width, height: height, depthOrArrayLayers: 1 },
+        format: format,
+        usage: renderAttachment + copySource
+      }) :> Result.andThen((texture) => {
+        device.createBuffer(JSON{
+          size: byteLength,
+          usage: copyDestination + mapRead
+        }) :> Result.andThen((staging) => {
+          Pipeline.upload(owned, fragment) :> Result.andThen((_) => {
+            let encode = Monad.via Result (view, encoder, group) => {
+              beginPass(encoder, view) :> Result.andThen((pass) => {
+                setPipeline(pass, owned.pipeline)
+                  :> Result.andThen((_) => {
+                    match(group) {
+                      Some(value) => { setBindGroup(pass, value) },
+                      None => { Ok(void) },
+                    }
+                  })
+                  :> Result.andThen((_) => { drawTriangle(pass) })
+                  :> Result.andThen((_) => { endPass(pass) })
+                  :> Result.andThen((_) => {
+                    copyToBuffer(encoder, texture, staging, width, height, rowBytes)
+                  })
+                  :> Result.andThen((_) => { finish(encoder) })
+              })
+            };
+            Result|
+              createView(texture),
+              device.createCommandEncoder(),
+              Pipeline.bindGroup(owned, fragment)
+            | :> encode :> Result.andThen((commands) => {
+              device.queue :> Result.andThen((queue) => {
+                submit(queue, commands) :> Result.map((_) => {
+                  (owned, texture, staging, mapMode)
+                })
+              })
+            })
+          })
+        })
+      })
+    })
+  };
+  Result|
+    GPUTextureUsage.RENDER_ATTACHMENT,
+    GPUTextureUsage.COPY_SRC,
+    GPUBufferUsage.COPY_DST,
+    GPUBufferUsage.MAP_READ,
+    GPUMapMode.READ
+  | :> build :> Task.fromResult :> Task.andThen((owned, texture, staging, mapMode) => {
+    mapRead(staging, mapMode) :> Task.andThen((_) => {
+      mappedRange(staging) :> Result.andThen((range) => {
+        copyMappedBytes(range) :> Result.map((bytes) => {
+          unmap(staging);
+          destroyBuffer(staging);
+          destroyTexture(texture);
+          let _cleanup = Pipeline.destroy(owned);
+          .{ bytes, width, height, rowBytes }
+        })
+      }) :> Task.fromResult
+    })
+  })
+};
+
+let length = (pixels: Pixels) => {
+  let bytes: Uint8Array = pixels.bytes;
+  byteLength(bytes)
+};
+
+let width = (pixels: Pixels) => { pixels.width };
+let height = (pixels: Pixels) => { pixels.height };
+let rowBytes = (pixels: Pixels) => { pixels.rowBytes };
+
+let byte = (pixels: Pixels, x: Number, y: Number, channel: Number) => {
+  let bytes: Uint8Array = pixels.bytes;
+  byteAt(bytes, y * pixels.rowBytes + x * 4 + channel)
+};

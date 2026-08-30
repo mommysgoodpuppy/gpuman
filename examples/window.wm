@@ -1,0 +1,55 @@
+-- An animated shader window. The application owns state and shader behavior;
+-- SdlWindow owns window/device setup, polling, resizing, drawing, and cleanup.
+
+from "../lib/gpuman.wm" import * as GpuMan;
+from "../lib/uniforms.wm" import { Frame };
+
+let shade = (uniforms: Frame) => {
+  (coord) => {
+    @gpu;
+    let uv = coord / uniforms.resolution;
+    let pulse = 0.5 + 0.5 * sin(uniforms.time);
+    if (uniforms.enabled) { (uv.x, uv.y, pulse, 1.0) } else { (0.0, 0.0, 0.0, 1.0) }
+  }
+};
+
+let fragment = (uniforms) => { Gpu.fragment(shade(uniforms)) };
+
+let update = (event, uniforms: Frame) => {
+  match(event, uniforms) {
+    (GpuMan.Resized(width, height), _) => {
+      let next: Frame = .{..uniforms, resolution = (width, height)};
+      GpuMan.Continue(next)
+    },
+    _ => { GpuMan.Continue(uniforms) },
+  }
+};
+
+let advance = (uniforms: Frame) => {
+  let next: Frame = .{ ..uniforms, time = uniforms.time + 0.016 };
+  GpuMan.Continue(next)
+};
+
+let settings: GpuMan.WindowConfig = .{
+  libraryPath = "libSDL2-2.0.so.0",
+  title = "gpuman",
+  width = 800,
+  height = 600,
+  frameDelay = 16,
+  resizable = true
+};
+
+let initial: Frame = .{
+  resolution = (800.0, 600.0),
+  time = 0.0,
+  enabled = true
+};
+
+let application: GpuMan.WindowApp<Frame> = .{
+  initial = initial,
+  update = update,
+  advance = advance,
+  fragment = fragment
+};
+
+let main = () => { GpuMan.runWindowAndReport(settings, application) };
