@@ -1,0 +1,220 @@
+-- A deliberately broad single-pass wmslang example: specialized helpers,
+-- a statically eliminated higher-order call, ADTs and matching, direct
+-- tail recursion, i32 loop state, vector math, and animated uniforms.
+
+from "../lib/gpuman.wm" import * as GpuMan;
+
+type MarchResult = Miss | Hit<Number>;
+
+record ShowcaseUniforms = {
+  resolution: (Number, Number),
+  time: Number,
+  camera: (Number, Number),
+  vivid: Bool
+};
+
+record ShowcaseState = {
+  resolution: (Number, Number),
+  time: Number,
+  camera: (Number, Number),
+  vivid: Bool
+};
+
+let showcaseShade = (uniforms: ShowcaseUniforms) => {
+  (coord) => {
+    @gpu;
+
+    -- The compiler specializes this ordinary HM helper for both scalar and
+    -- vector calls below.
+    let remap = (value) => { value * 2.0 - 1.0 };
+
+    let rotate = (point, angle) => {
+      let sine = sin(angle);
+      let cosine = cos(angle);
+      (
+        point.x * cosine - point.y * sine,
+        point.x * sine + point.y * cosine
+      )
+    };
+
+    -- Function arguments are supported when specialization can prove the
+    -- exact local function and erase it before shader emission.
+    let applyTwice = (operation, value) => {
+      operation(operation(value))
+    };
+
+    let softMinimum = (left, right, radius) => {
+      let blend = clamp(0.5 + 0.5 * (right - left) / radius, 0.0, 1.0);
+      lerp(right, left, blend) - radius * blend * (1.0 - blend)
+    };
+
+    let palette = (phase) => {
+      let offsets = (0.0, 0.33, 0.67);
+      0.5 + 0.5 * cos((phase + offsets) * 6.2831853)
+    };
+
+    let bend = (point) => {
+      let angle = sin(point.y * 1.7 + uniforms.time * 0.7) * 0.18;
+      let xz = rotate((point.x, point.z), angle);
+      (xz.x, point.y, xz.y)
+    };
+
+    let sceneDistance = (sourcePoint) => {
+      let point = applyTwice(bend, sourcePoint);
+      let repeat = 2.4;
+      let cellX = fmod(point.x + repeat * 0.5, repeat) - repeat * 0.5;
+      let cellZ = fmod(point.z + repeat * 0.5, repeat) - repeat * 0.5;
+      let local = (cellX, point.y, cellZ);
+      let sphere = length(local) - 0.58;
+      let ringPlane = (length((local.x, local.z)) - 0.82, local.y);
+      let ring = length(ringPlane) - 0.12;
+      softMinimum(sphere, ring, 0.16)
+    };
+
+    let rec march = (origin, direction, distance, steps) => {
+      if (steps >= 72 || distance > 40.0) {
+        Miss
+      } else {
+        let stepDistance = sceneDistance(origin + direction * distance);
+        let epsilon = 0.0015 + Gpu.f32(steps) * 0.00001;
+        if (stepDistance < epsilon) {
+          Hit(distance)
+        } else {
+          march(origin, direction, distance + stepDistance, steps + 1)
+        }
+      }
+    };
+
+    let normalAt = (point) => {
+      let epsilon = 0.002;
+      let center = sceneDistance(point);
+      normalize((
+        sceneDistance(point + (epsilon, 0.0, 0.0)) - center,
+        sceneDistance(point + (0.0, epsilon, 0.0)) - center,
+        sceneDistance(point + (0.0, 0.0, epsilon)) - center
+      ))
+    };
+
+    -- Keeping the match as this helper's root expression also works around a
+    -- current normalizer bug for `let value = match(...)` when its arms have
+    -- local declarations.
+    let shadeMarch = (result, origin, direction) => {
+      match(result) {
+        Miss => {
+          let horizon = smoothstep(-0.7, 0.8, direction.y);
+          (0.025, 0.035, 0.075) * (1.0 - horizon)
+            + (0.18, 0.30, 0.48) * horizon
+        },
+        Hit(distance) => {
+          let point = origin + direction * distance;
+          let normal = normalAt(point);
+          let lightDirection = normalize((0.6, 0.8, -0.5));
+          let diffuse = max(dot(normal, lightDirection), 0.0);
+          let rim = pow(1.0 - max(dot(normal, 0.0 - direction), 0.0), 3.0);
+          let bands = palette(point.y * 0.22 + distance * 0.035 + uniforms.time * 0.1);
+          let distanceGlow = 1.0 - saturate(distance / 40.0);
+          let lit =
+            bands * (0.12 + diffuse * 0.88)
+              + rim * 0.35
+              + distanceGlow * 0.04;
+          if (uniforms.vivid) { saturate(lit) } else {
+            let luminance = dot(lit, (0.299, 0.587, 0.114));
+            (luminance, luminance, luminance)
+          }
+        }
+      }
+    };
+
+    let shortest = min(uniforms.resolution.x, uniforms.resolution.y);
+    let uv = remap(coord / uniforms.resolution) * uniforms.resolution / shortest;
+    let pulse = remap(0.5 + 0.5 * sin(uniforms.time * 0.6));
+    let pitch = uniforms.camera.y;
+    let yaw = uniforms.camera.x + uniforms.time * 0.08 + pulse * 0.025;
+    let baseOrigin = (0.0, 0.25, -5.2);
+    let baseDirection = normalize((uv.x, 0.0 - uv.y, 1.8));
+    let originYZ = rotate((baseOrigin.y, baseOrigin.z), pitch);
+    let directionYZ = rotate((baseDirection.y, baseDirection.z), pitch);
+    let pitchedOrigin = (baseOrigin.x, originYZ.x, originYZ.y);
+    let pitchedDirection = (baseDirection.x, directionYZ.x, directionYZ.y);
+    let originXZ = rotate((pitchedOrigin.x, pitchedOrigin.z), yaw);
+    let directionXZ = rotate((pitchedDirection.x, pitchedDirection.z), yaw);
+    let origin = (originXZ.x, pitchedOrigin.y, originXZ.y);
+    let direction = normalize((directionXZ.x, pitchedDirection.y, directionXZ.y));
+
+    let color = shadeMarch(march(origin, direction, 0.0, 0), origin, direction);
+
+    let vignette = smoothstep(1.35, 0.25, length(uv));
+    let finalColor = color * (0.45 + vignette * 0.55);
+    (finalColor.x, finalColor.y, finalColor.z, 1.0)
+  }
+};
+
+let fragment = (state: ShowcaseState) => {
+  let uniforms: ShowcaseUniforms = .{
+    resolution = state.resolution,
+    time = state.time,
+    camera = state.camera,
+    vivid = state.vivid
+  };
+  Gpu.fragment(showcaseShade(uniforms))
+};
+
+let clampPitch = (pitch) => {
+  if (pitch < -1.0) { -1.0 } else {
+    if (pitch > 1.0) { 1.0 } else { pitch }
+  }
+};
+
+let update = (event, state: ShowcaseState) => {
+  match(event) {
+    GpuMan.Resized(width, height) => {
+      let next: ShowcaseState = .{
+        ..state,
+        resolution = (width, height)
+      };
+      GpuMan.Continue(next)
+    },
+    GpuMan.MouseMoved(dx, dy) => {
+      let (yaw, pitch) = state.camera;
+      let next: ShowcaseState = .{
+        ..state,
+        camera = (
+          yaw + dx * 0.004,
+          clampPitch(pitch + dy * 0.004)
+        )
+      };
+      GpuMan.Continue(next)
+    },
+    _ => { GpuMan.Continue(state) }
+  }
+};
+
+let advance = (state: ShowcaseState) => {
+  let next: ShowcaseState = .{ ..state, time = state.time + 0.016 };
+  GpuMan.Continue(next)
+};
+
+let initial: ShowcaseState = .{
+  resolution = (960.0, 640.0),
+  time = 0.0,
+  camera = (0.0, 0.0),
+  vivid = true
+};
+
+let settings: GpuMan.WindowConfig = .{
+  libraryPath = "SDL2.dll",
+  title = "gpuman shader showcase",
+  width = 960,
+  height = 640,
+  frameDelay = 16,
+  resizable = true
+};
+
+let application: GpuMan.WindowApp<ShowcaseState> = .{
+  initial = initial,
+  update = update,
+  advance = advance,
+  fragment = fragment
+};
+
+let main = () => { GpuMan.runWindowAndReport(settings, application) };

@@ -4,6 +4,9 @@
 adapter, device, shader-module, pipeline, uniform-buffer, bind-group, command-encoder, render-pass,
 submission, and mapped-readback chores without trying to become an engine or hide your frame loop.
 
+New to Workman shaders or coming from Shadertoy/GLSL? Start with
+[Shader programming in Workman](docs/shader-programming.md).
+
 The shortest useful shape is:
 
 ```wm
@@ -86,14 +89,26 @@ handling remain with that toolkit. No SDL type leaks into the renderer.
 
 ```sh
 wm check examples/window.wm
+wm check examples/shader_showcase.wm
 wm check examples/readback.wm
 wm run examples/window.wm
+wm run examples/shader_showcase.wm
 wm run examples/readback.wm
 ```
 
 [`examples/window.wm`](examples/window.wm) is an animated SDL window. It expects an SDL2 shared
-library named `libSDL2-2.0.so.0`; change `settings.libraryPath` for another platform or path.
-The SDL adapter currently supports the X11 and Wayland native handles exposed by SDL2 and Deno.
+library; set `settings.libraryPath` to `SDL2.dll` on Windows or, commonly,
+`libSDL2-2.0.so.0` on Linux. The SDL adapter supports the Win32, X11, and Wayland native handles
+exposed by SDL2 and Deno. It currently targets 64-bit Deno runtimes.
+
+On Windows, the adapter selects D3D12 before Deno creates its WebGPU instance. This avoids a
+Vulkan swapchain teardown panic in the wgpu version shipped by Deno 2.9.6. An explicitly supplied
+`DENO_WEBGPU_BACKEND` environment variable is always respected.
+
+[`examples/shader_showcase.wm`](examples/shader_showcase.wm) is the more substantial shader-language
+tour: an animated procedural ray marcher using inferred scalar/vector specialization, a statically
+eliminated higher-order call, an ADT result, integer tail-recursive stepping, domain warping, normal
+estimation, palette math, and mouse-controlled camera uniforms.
 
 For the usual case, import only `gpuman.wm` and use `GpuMan.runWindow` or
 `GpuMan.runWindowAndReport`. A `GpuMan.WindowApp<State>` supplies only:

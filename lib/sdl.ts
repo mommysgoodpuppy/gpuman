@@ -24,7 +24,10 @@ type SdlSymbols = {
     result: "pointer";
   };
   SDL_DestroyWindow: { parameters: readonly ["pointer"]; result: "void" };
-  SDL_GetWindowWMInfo: { parameters: readonly ["pointer", "pointer"]; result: "i32" };
+  SDL_GetWindowWMInfo: {
+    parameters: readonly ["pointer", "pointer"];
+    result: "i32";
+  };
   SDL_GetVersion: { parameters: readonly ["pointer"]; result: "void" };
   SDL_PollEvent: { parameters: readonly ["pointer"]; result: "i32" };
   SDL_Delay: { parameters: readonly ["u32"]; result: "void" };
@@ -53,6 +56,63 @@ const SDL_WINDOWEVENT = 0x200;
 const SDL_WINDOWEVENT_SIZE_CHANGED = 6;
 const SDL_MOUSEMOTION = 0x400;
 
+// SDL_SYSWM_TYPE values from SDL2's SDL_syswm.h.
+const SDL_SYSWM_WINDOWS = 1;
+const SDL_SYSWM_X11 = 2;
+const SDL_SYSWM_WAYLAND = 6;
+
+type NativeWindow = {
+  readonly system: "win32" | "x11" | "wayland";
+  readonly windowHandle: Deno.PointerObject;
+  readonly displayHandle: Deno.PointerValue;
+};
+
+function nativeWindow(view: Deno.UnsafePointerView): NativeWindow {
+  const subsystem = view.getUint32(4);
+
+  // The SDL_SysWMinfo union starts at byte 8 on the 64-bit platforms supported
+  // by Deno. Win32 stores HWND, HDC, HINSTANCE; X11/Wayland store display first
+  // and window/surface second.
+  if (subsystem === SDL_SYSWM_WINDOWS) {
+    const windowHandle = view.getPointer(8);
+    const displayHandle = view.getPointer(24);
+    if (!windowHandle) throw new Error("SDL returned no Win32 HWND");
+    return { system: "win32", windowHandle, displayHandle };
+  }
+
+  if (subsystem === SDL_SYSWM_X11 || subsystem === SDL_SYSWM_WAYLAND) {
+    const displayHandle = view.getPointer(8);
+    const windowHandle = view.getPointer(16);
+    if (!displayHandle || !windowHandle) {
+      throw new Error("SDL returned incomplete native handles");
+    }
+    return {
+      system: subsystem === SDL_SYSWM_X11 ? "x11" : "wayland",
+      windowHandle,
+      displayHandle,
+    };
+  }
+
+  throw new Error(`unsupported SDL window subsystem ${subsystem}`);
+}
+
+function selectWindowsWebGpuBackend(): void {
+  if (Deno.build.os !== "windows") return;
+
+  try {
+    // Deno/wgpu currently prefers Vulkan on some Windows machines. wgpu 29's
+    // Vulkan surface teardown can panic while releasing an acquired texture;
+    // D3D12 is the native Windows backend and avoids that failure. Respect an
+    // explicit caller choice, and set this before UnsafeWindowSurface creates
+    // Deno's shared wgpu instance.
+    if (Deno.env.get("DENO_WEBGPU_BACKEND") === undefined) {
+      Deno.env.set("DENO_WEBGPU_BACKEND", "dx12");
+    }
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotCapable)) throw error;
+  }
+}
+
 export function openWindow(
   libraryPath: string,
   title: string,
@@ -60,9 +120,14 @@ export function openWindow(
   height: number,
   resizable: boolean,
 ): SdlWindow {
-  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+  if (
+    !Number.isInteger(width) || width <= 0 || !Number.isInteger(height) ||
+    height <= 0
+  ) {
     throw new Error("SDL window dimensions must be positive integers");
   }
+
+  selectWindowsWebGpuBackend();
 
   const library = Deno.dlopen<SdlSymbols>(libraryPath, symbols);
   try {
@@ -90,12 +155,7 @@ export function openWindow(
         throw new Error("SDL_GetWindowWMInfo failed");
       }
       const view = new Deno.UnsafePointerView(infoPointer);
-      const subsystem = view.getUint32(4);
-      const system = subsystem === 2 ? "x11" : subsystem === 6 ? "wayland" : undefined;
-      if (!system) throw new Error("SDL window is neither X11 nor Wayland");
-      const displayHandle = view.getPointer(8);
-      const windowHandle = view.getPointer(16);
-      if (!displayHandle || !windowHandle) throw new Error("SDL returned incomplete native handles");
+      const { system, windowHandle, displayHandle } = nativeWindow(view);
 
       const surface = new Deno.UnsafeWindowSurface({
         system,
@@ -135,11 +195,22 @@ export function pollEvent(runtime: SdlWindow): SdlEvent {
   }
   const type = runtime.eventView.getUint32(0);
   if (type === SDL_QUIT) return { kind: 1, a: 0, b: 0 };
-  if (type === SDL_WINDOWEVENT && runtime.eventView.getUint8(12) === SDL_WINDOWEVENT_SIZE_CHANGED) {
-    return { kind: 2, a: runtime.eventView.getInt32(16), b: runtime.eventView.getInt32(20) };
+  if (
+    type === SDL_WINDOWEVENT &&
+    runtime.eventView.getUint8(12) === SDL_WINDOWEVENT_SIZE_CHANGED
+  ) {
+    return {
+      kind: 2,
+      a: runtime.eventView.getInt32(16),
+      b: runtime.eventView.getInt32(20),
+    };
   }
   if (type === SDL_MOUSEMOTION) {
-    return { kind: 3, a: runtime.eventView.getInt32(28), b: runtime.eventView.getInt32(32) };
+    return {
+      kind: 3,
+      a: runtime.eventView.getInt32(28),
+      b: runtime.eventView.getInt32(32),
+    };
   }
   return { kind: 0, a: 0, b: 0 };
 }
@@ -150,11 +221,17 @@ export const eventB = (event: SdlEvent): number => event.b;
 
 export function canvasContext(runtime: SdlWindow): GPUCanvasContext {
   const context = runtime.surface.getContext("webgpu");
-  if (!context) throw new Error("Deno UnsafeWindowSurface returned no WebGPU context");
+  if (!context) {
+    throw new Error("Deno UnsafeWindowSurface returned no WebGPU context");
+  }
   return context as GPUCanvasContext;
 }
 
-export function resizeWindowSurface(runtime: SdlWindow, width: number, height: number): void {
+export function resizeWindowSurface(
+  runtime: SdlWindow,
+  width: number,
+  height: number,
+): void {
   runtime.surface.width = width;
   runtime.surface.height = height;
 }

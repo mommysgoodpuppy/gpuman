@@ -31,7 +31,7 @@ let advance = (uniforms: Frame) => {
 };
 
 let settings: GpuMan.WindowConfig = .{
-  libraryPath = "libSDL2-2.0.so.0",
+  libraryPath = "SDL2.dll",
   title = "gpuman",
   width = 800,
   height = 600,
