@@ -22,9 +22,9 @@ record Pipeline = {
 };
 
 let create = (device: GPUDevice, format: String, fragment: Gpu.Fragment) => {
-  let module = device.createShaderModule(JSON{ code: Gpu.wgsl(fragment) });
+  let module = device:>.createShaderModule(JSON{ code: Gpu.wgsl(fragment) });
   module :> Result.andThen((module) => {
-    device.createRenderPipeline(JSON{
+    device:>.createRenderPipeline(JSON{
       layout: "auto",
       vertex: JSON{
         module: module,
@@ -48,7 +48,7 @@ let create = (device: GPUDevice, format: String, fragment: Gpu.Fragment) => {
             bindGroupLayout = None
           })
         } else {
-          pipeline.getBindGroupLayout(0) :> Result.andThen((layout) => {
+          pipeline:>.getBindGroupLayout(0) :> Result.andThen((layout) => {
             if (Gpu.uniformByteLength(fragment) <= 0) {
               Ok(.{
                 device,
@@ -59,7 +59,7 @@ let create = (device: GPUDevice, format: String, fragment: Gpu.Fragment) => {
                 bindGroupLayout = Some(layout)
               })
             } else {
-              device.createBuffer(JSON{
+              device:>.createBuffer(JSON{
                 size: Gpu.uniformByteLength(fragment),
                 usage: uniformUsage + copyDestinationUsage
               }) :> Result.map((buffer) => {
@@ -96,8 +96,8 @@ let upload = (owned: Pipeline, fragment: Gpu.Fragment) => {
       },
       Some(buffer) => {
         Uint8Array.new(Gpu.uniformBytes(fragment)) :> Result.andThen((bytes) => {
-          device.queue :> Result.andThen((queue) => {
-            queue.writeBuffer(buffer, 0, bytes)
+          device:>.queue :> Result.andThen((queue) => {
+            queue:>.writeBuffer(buffer, 0, bytes)
           })
         })
       },
@@ -118,7 +118,7 @@ let bindGroup = (owned: Pipeline, fragment: Gpu.Fragment) => {
     Some(layout) => {
       Gpu.bindGroupEntries(fragment, device, owned.uniformBuffer)
         :> Result.andThen((entries) => {
-          device.createBindGroup(JSON{
+          device:>.createBindGroup(JSON{
             layout: layout,
             entries: entries
           }) :> Result.map(Some)
@@ -129,7 +129,7 @@ let bindGroup = (owned: Pipeline, fragment: Gpu.Fragment) => {
 
 let destroy = (owned: Pipeline) => {
   match(owned.uniformBuffer) {
-    Some(buffer) => { buffer.destroy() },
+    Some(buffer) => { buffer:>.destroy() },
     None => { Ok(void) },
   }
 };

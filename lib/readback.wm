@@ -19,9 +19,9 @@ record Pixels = {
   rowBytes: Number
 };
 
-let createView = (texture: GPUTexture) => { texture.createView() };
+let createView = (texture: GPUTexture) => { texture:>.createView() };
 let beginPass = (encoder: GPUCommandEncoder, view: GPUTextureView) => {
-  encoder.beginRenderPass(JSON{
+  encoder:>.beginRenderPass(JSON{
     colorAttachments: JSON[JSON{
       view: view,
       loadOp: "clear",
@@ -31,13 +31,13 @@ let beginPass = (encoder: GPUCommandEncoder, view: GPUTextureView) => {
   })
 };
 let setPipeline = (pass: GPURenderPassEncoder, pipeline: GPURenderPipeline) => {
-  pass.setPipeline(pipeline)
+  pass:>.setPipeline(pipeline)
 };
 let setBindGroup = (pass: GPURenderPassEncoder, group: GPUBindGroup) => {
-  pass.setBindGroup(0, Some(group))
+  pass:>.setBindGroup(0, Some(group))
 };
-let drawTriangle = (pass: GPURenderPassEncoder) => { pass.draw(3, 1, 0, 0) };
-let endPass = (pass: GPURenderPassEncoder) => { pass.end() };
+let drawTriangle = (pass: GPURenderPassEncoder) => { pass:>.draw(3, 1, 0, 0) };
+let endPass = (pass: GPURenderPassEncoder) => { pass:>.end() };
 let copyToBuffer = (
   encoder: GPUCommandEncoder,
   texture: GPUTexture,
@@ -46,21 +46,21 @@ let copyToBuffer = (
   height: Number,
   rowBytes: Number
 ) => {
-  encoder.copyTextureToBuffer(
+  encoder:>.copyTextureToBuffer(
     JSON{ texture: texture },
     JSON{ buffer: staging, bytesPerRow: rowBytes, rowsPerImage: height },
     JSON{ width: width, height: height, depthOrArrayLayers: 1 }
   )
 };
-let finish = (encoder: GPUCommandEncoder) => { encoder.finish() };
+let finish = (encoder: GPUCommandEncoder) => { encoder:>.finish() };
 let submit = (queue: GPUQueue, commands: GPUCommandBuffer) => {
-  queue.submit(JSON[commands])
+  queue:>.submit(JSON[commands])
 };
-let mapRead = (staging: GPUBuffer, mode: Number) => { staging.mapAsync(mode) };
-let mappedRange = (staging: GPUBuffer) => { staging.getMappedRange() };
-let unmap = (staging: GPUBuffer) => { staging.unmap() };
-let destroyBuffer = (staging: GPUBuffer) => { staging.destroy() };
-let destroyTexture = (texture: GPUTexture) => { texture.destroy() };
+let mapRead = (staging: GPUBuffer, mode: Number) => { staging:>.mapAsync(mode) };
+let mappedRange = (staging: GPUBuffer) => { staging:>.getMappedRange() };
+let unmap = (staging: GPUBuffer) => { staging:>.unmap() };
+let destroyBuffer = (staging: GPUBuffer) => { staging:>.destroy() };
+let destroyTexture = (texture: GPUTexture) => { texture:>.destroy() };
 
 let render = (
   device: GPUDevice,
@@ -85,12 +85,12 @@ let render = (
     mapMode
   ) => {
     Pipeline.create(device, format, fragment) :> Result.andThen((owned) => {
-      device.createTexture(JSON{
+      device:>.createTexture(JSON{
         size: JSON{ width: width, height: height, depthOrArrayLayers: 1 },
         format: format,
         usage: renderAttachment + copySource
       }) :> Result.andThen((texture) => {
-        device.createBuffer(JSON{
+        device:>.createBuffer(JSON{
           size: byteLength,
           usage: copyDestination + mapRead
         }) :> Result.andThen((staging) => {
@@ -114,10 +114,10 @@ let render = (
             };
             Result|
               createView(texture),
-              device.createCommandEncoder(),
+              device:>.createCommandEncoder(),
               Pipeline.bindGroup(owned, fragment)
             | :> encode :> Result.andThen((commands) => {
-              device.queue :> Result.andThen((queue) => {
+              device:>.queue :> Result.andThen((queue) => {
                 submit(queue, commands) :> Result.map((_) => {
                   (owned, texture, staging, mapMode)
                 })

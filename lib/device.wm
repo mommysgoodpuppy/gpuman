@@ -6,13 +6,13 @@ from js.global import type { GPU, GPUAdapter, GPUDevice };
 
 let requireAdapter = (adapter: Option<GPUAdapter>) => {
   match(adapter) {
-    Some(value) => { value.requestDevice() },
+    Some(value) => { value:>.requestDevice() },
     None => { Js.Error("WebGPU found no suitable adapter") :> Task.fail },
   }
 };
 
 let requestFrom = (source: GPU) => {
-  source.requestAdapter() :> Task.andThen(requireAdapter)
+  source:>.requestAdapter() :> Task.andThen(requireAdapter)
 };
 
 let request = () => {
@@ -20,5 +20,5 @@ let request = () => {
 };
 
 let preferredCanvasFormat = () => {
-  gpu.getPreferredCanvasFormat()
+  gpu:>.getPreferredCanvasFormat()
 };

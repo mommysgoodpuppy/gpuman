@@ -24,7 +24,7 @@ let configure = (
   device: GPUDevice,
   format: String
 ) => {
-  context.configure(JSON{
+  context:>.configure(JSON{
     device: device,
     format: format,
     alphaMode: "opaque"
@@ -59,9 +59,9 @@ let draw = (renderer: Renderer, fragment: Gpu.Fragment) => {
   let context: GPUCanvasContext = renderer.context;
   Pipeline.upload(renderer.owned, fragment) :> Result.andThen((_) => {
     let prepare = Monad.via Result (texture, encoder, group) => {
-      texture.createView() :> Result.andThen((view) => {
+      texture:>.createView() :> Result.andThen((view) => {
         let (red, green, blue, alpha) = renderer.clear;
-        encoder.beginRenderPass(JSON{
+        encoder:>.beginRenderPass(JSON{
           colorAttachments: JSON[JSON{
             view: view,
             loadOp: "clear",
@@ -69,26 +69,26 @@ let draw = (renderer: Renderer, fragment: Gpu.Fragment) => {
             clearValue: JSON{ r: red, g: green, b: blue, a: alpha }
           }]
         }) :> Result.andThen((pass) => {
-          pass.setPipeline(renderer.owned.pipeline)
+          pass:>.setPipeline(renderer.owned.pipeline)
             :> Result.andThen((_) => {
               match(group) {
-                Some(value) => { pass.setBindGroup(0, Some(value)) },
+                Some(value) => { pass:>.setBindGroup(0, Some(value)) },
                 None => { Ok(void) },
               }
             })
-            :> Result.andThen((_) => { pass.draw(3, 1, 0, 0) })
-            :> Result.andThen((_) => { pass.end() })
-            :> Result.andThen((_) => { encoder.finish() })
+            :> Result.andThen((_) => { pass:>.draw(3, 1, 0, 0) })
+            :> Result.andThen((_) => { pass:>.end() })
+            :> Result.andThen((_) => { encoder:>.finish() })
         })
       })
     };
     Result|
-      context.getCurrentTexture(),
-      device.createCommandEncoder(),
+      context:>.getCurrentTexture(),
+      device:>.createCommandEncoder(),
       Pipeline.bindGroup(renderer.owned, fragment)
     | :> prepare :> Result.andThen((commands) => {
-      device.queue :> Result.andThen((queue) => {
-        queue.submit(JSON[commands])
+      device:>.queue :> Result.andThen((queue) => {
+        queue:>.submit(JSON[commands])
       })
     })
   })
@@ -96,6 +96,6 @@ let draw = (renderer: Renderer, fragment: Gpu.Fragment) => {
 
 let destroy = (renderer: Renderer) => {
   let context: GPUCanvasContext = renderer.context;
-  Result|Pipeline.destroy(renderer.owned), context.unconfigure()|
+  Result|Pipeline.destroy(renderer.owned), context:>.unconfigure()|
     :> Result.map((_) => { void })
 };
